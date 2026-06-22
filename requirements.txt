@@ -1,0 +1,17 @@
+# Author: Mithil Baria
+# Core AI / RAG
+torch
+transformers
+langgraph
+langchain
+langchain-community
+langchain-huggingface
+faiss-cpu
+sentence-transformers
+
+# Models
+accelerate
+
+# Frontend
+streamlit
+ollama

@@ -1,0 +1,123 @@
+# Author: Mithil
+import json
+import os
+from langchain_core.documents import Document
+from langchain_community.vectorstores import FAISS
+from langchain_huggingface import HuggingFaceEmbeddings
+
+CORPUS_FILE = "vector_ready_corpus_with_metadata.json"
+INDEX_DIR = "./faiss_index"
+EMBEDDING_MODEL = "BAAI/bge-large-en-v1.5"
+
+print("=" * 60)
+print("  🍛 BUILDING SEMANTIC FAISS INDEX")
+print("=" * 60)
+
+with open(CORPUS_FILE, "r", encoding="utf-8") as f:
+    raw_recipes = json.load(f)
+
+print(f"✅ Loaded {len(raw_recipes)} raw recipe documents from JSON.\n")
+
+chunked_documents = []
+
+for item in raw_recipes:
+    dish_name    = str(item.get("title", "Unknown Dish")).strip()
+    recipe_id    = str(item.get("id", dish_name.replace(" ", "_").lower())).strip()
+    source_url   = item.get("source_url", "")
+    cuisine_type = item.get("cuisine_type", "South Asian")
+
+    nested_meta  = item.get("metadata", {})
+    diet         = nested_meta.get("diet", "unknown")
+    prep_time    = nested_meta.get("prep_time", "unknown")
+    dish_type    = nested_meta.get("dish_type", "unknown")
+
+    base_meta = {
+        "title":        dish_name,
+        "source_url":   source_url,
+        "cuisine_type": cuisine_type,
+        "diet":         diet,
+        "prep_time":    prep_time,
+        "dish_type":    dish_type,
+    }
+
+    recipe_block  = item.get("recipe", {})
+    intro_text    = recipe_block.get("intro", "").strip()
+
+    ingredients_raw = recipe_block.get("ingredients", [])
+    ing_text = "\n".join(f"- {i}" for i in ingredients_raw).strip()
+
+    instructions_raw = recipe_block.get("instructions", [])
+    inst_text = "\n".join(instructions_raw).strip()
+
+    if intro_text:
+        meta_intro = {**base_meta,
+                      "db_chunk_id":  f"{recipe_id}_intro",
+                      "content_type": "introduction"}
+        chunked_documents.append(Document(
+            page_content=(
+                f"Dish: {dish_name}\n"
+                f"Section: Introduction\n\n"
+                f"{intro_text}"
+            ),
+            metadata=meta_intro
+        ))
+
+    if ing_text:
+        meta_ing = {**base_meta,
+                    "db_chunk_id":  f"{recipe_id}_ingredients",
+                    "content_type": "ingredients"}
+        chunked_documents.append(Document(
+            page_content=(
+                f"Dish: {dish_name}\n"
+                f"Section: Ingredients\n\n"
+                f"{ing_text}"
+            ),
+            metadata=meta_ing
+        ))
+
+    if inst_text:
+        meta_inst = {**base_meta,
+                     "db_chunk_id":  f"{recipe_id}_instructions",
+                     "content_type": "instructions"}
+        chunked_documents.append(Document(
+            page_content=(
+                f"Dish: {dish_name}\n"
+                f"Section: Instructions\n\n"
+                f"{inst_text}"
+            ),
+            metadata=meta_inst
+        ))
+
+print(f"✅ Created {len(chunked_documents)} semantic chunks "
+      f"from {len(raw_recipes)} recipes "
+      f"(~3 chunks each: intro + ingredients + instructions)\n")
+
+if len(chunked_documents) == 0:
+    raise ValueError(
+        "CRITICAL: 0 chunks were created. "
+        "Check that 'recipe' keys exist in your JSON."
+    )
+
+print(f"🔄 Initialising embedding model: {EMBEDDING_MODEL} ...")
+embeddings = HuggingFaceEmbeddings(
+    model_name=EMBEDDING_MODEL,
+    model_kwargs={"device": "cpu"},
+    encode_kwargs={"normalize_embeddings": True},
+)
+
+print("🔄 Vectorising chunks and building FAISS index ...")
+vector_store = FAISS.from_documents(chunked_documents, embeddings)
+
+os.makedirs(INDEX_DIR, exist_ok=True)
+vector_store.save_local(INDEX_DIR)
+
+print(f"\n✅ FAISS index saved to '{INDEX_DIR}/'")
+print("   Files created: index.faiss  +  index.pkl")
+print("\n🎉 Done! Your index is ready for the LangGraph pipeline.\n")
+
+print("=" * 60)
+print("  🔍 SANITY CHECK — Sample chunk structure")
+print("=" * 60)
+sample = chunked_documents[0]
+print(f"page_content preview:\n{sample.page_content[:300]}\n")
+print(f"metadata:\n{json.dumps(sample.metadata, indent=2)}")
